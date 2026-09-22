@@ -1,5 +1,6 @@
 export { Edgelit } from './renderer'
 export { Camera } from './camera'
-export { SpatialGrid } from './grid'
+export { SpatialGrid, EdgeIndex } from './grid'
+export { parallelOffsets, edgeDist2, quadAt, controlPoint } from './curves'
 export { Shape, Dash, Arrow } from './types'
 export type { ShapeId, DashId, GraphInput, NodeStyle, EdgeStyle, RendererOptions, PointerInfo, EventMap, LabelEntry, BBox } from './types'

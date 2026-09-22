@@ -82,19 +82,44 @@ void main() {
   o = f + b * (1.0 - f.a);
 }`
 
-// Shared by the edge body and the marker programs.
+// Shared by the edge body and the marker programs. Edges are quadratic
+// curves: control point = midpoint displaced along the left normal by
+// 2 * a_offset (so the curve passes a_offset from the chord at t = 0.5).
+// a_offset is 0 for non-parallel edges, which makes the curve the chord.
 const EDGE_COMMON = `
-in vec2 a_corner;
 in uvec2 a_ends;
 in vec4 a_color;
 in float a_width;
 in uint a_arrow;
 in uint a_dash;
+in float a_offset;
 float arrowLen(float w, uint arrow) { return (arrow & 1u) != 0u ? max(w * 3.0, 4.0) : 0.0; }
 float circleR(float w, uint arrow) { return (arrow & 2u) != 0u ? max(w * 1.5, 2.0) : 0.0; }
+struct Curve { vec2 p0; vec2 p1; vec2 p2; float t0; float t1; bool ok; };
+vec2 curveAt(Curve c, float t) { float u = 1.0 - t; return u * u * c.p0 + 2.0 * u * t * c.p1 + t * t * c.p2; }
+vec2 curveTangent(Curve c, float t) { return 2.0 * (1.0 - t) * (c.p1 - c.p0) + 2.0 * t * (c.p2 - c.p1); }
+Curve makeCurve(vec4 s, vec4 t, float w, uint arrow, float offset) {
+  Curve c;
+  c.p0 = s.xy; c.p2 = t.xy;
+  vec2 d = c.p2 - c.p0;
+  float len = length(d);
+  c.ok = s.w >= 0.5 && t.w >= 0.5 && len >= 1e-6 && w > 0.0 && a_ends.x != a_ends.y;
+  vec2 nrm = c.ok ? vec2(-d.y, d.x) / len : vec2(0.0);
+  c.p1 = (c.p0 + c.p2) * 0.5 + nrm * (2.0 * offset);
+  float rs = s.z * 0.5 + circleR(w, arrow) * 2.0;
+  float rt = t.z * 0.5 + arrowLen(w, arrow);
+  c.t0 = c.ok ? rs / len : 0.0;
+  c.t1 = c.ok ? 1.0 - rt / len : 0.0;
+  if (c.t1 <= c.t0) c.ok = false;
+  return c;
+}
 `
 
+/** Segments per curved edge. Straight edges are drawn with a single segment. */
+export const EDGE_SEGMENTS = 8
+
 export const EDGE_VS = `${HEADER}${EDGE_COMMON}
+uniform int u_seg;
 out vec2 v_ps;
 out vec4 v_color;
 flat out float v_halfw;
@@ -102,20 +127,33 @@ flat out uint v_dash;
 void main() {
   vec4 s = fetchNode(int(a_ends.x));
   vec4 t = fetchNode(int(a_ends.y));
-  vec2 d = t.xy - s.xy;
-  float len = length(d);
-  if (s.w < 0.5 || t.w < 0.5 || len < 1e-6 || a_width <= 0.0) { gl_Position = OFFSCREEN; return; }
-  vec2 dir = d / len;
-  vec2 nrm = vec2(-dir.y, dir.x);
-  float rs = s.z * 0.5 + circleR(a_width, a_arrow) * 2.0;
-  float rt = t.z * 0.5 + arrowLen(a_width, a_arrow);
-  float L = max(len - rs - rt, 0.0);
-  vec2 p0 = s.xy + dir * rs;
+  Curve c = makeCurve(s, t, a_width, a_arrow, a_offset);
+  if (!c.ok) { gl_Position = OFFSCREEN; return; }
+  int SEG = u_seg;
+  int i = gl_VertexID >> 1;
+  float side = (gl_VertexID & 1) == 0 ? -1.0 : 1.0;
+  float tt = mix(c.t0, c.t1, float(i) / float(SEG));
+  vec2 p = curveAt(c, tt);
+  vec2 tan = normalize(curveTangent(c, tt));
+  vec2 nrm = vec2(-tan.y, tan.x);
+  // arc length up to this vertex, for dash patterns; exact and loop-free for straight edges
+  float arc;
+  if (a_offset == 0.0) {
+    arc = (tt - c.t0) * length(c.p2 - c.p0);
+  } else {
+    arc = 0.0;
+    vec2 prev = curveAt(c, c.t0);
+    for (int j = 1; j <= i; j++) {
+      vec2 q = curveAt(c, mix(c.t0, c.t1, float(j) / float(SEG)));
+      arc += length(q - prev);
+      prev = q;
+    }
+  }
   float pad = 1.0 / u_pxPerWorld;
   float hw = a_width * 0.5 + pad;
-  vec2 world = p0 + dir * (a_corner.x * L) + nrm * (a_corner.y * hw);
+  vec2 world = p + nrm * (side * hw);
   gl_Position = vec4((u_view * vec3(world, 1.0)).xy, 0.0, 1.0);
-  v_ps = vec2(a_corner.x * L * u_pxPerWorld, a_corner.y * hw);
+  v_ps = vec2(arc * u_pxPerWorld, side * hw);
   v_halfw = a_width * 0.5;
   v_color = a_color;
   v_dash = a_dash;
@@ -138,24 +176,28 @@ void main() {
   o = vec4(v_color.rgb * v_color.a, v_color.a) * a;
 }`
 
-// Markers: u_end 0 = source circle, 1 = target triangle. One quad per edge.
+// Markers: u_end 0 = source circle, 1 = target triangle. One quad per edge,
+// placed on the curve and oriented along its tangent at that end.
 export const MARKER_VS = `${HEADER}${EDGE_COMMON}
 uniform int u_end;
+in vec2 a_corner;
 out vec2 v_q;
 out vec4 v_color;
 flat out float v_ext;
 void main() {
   vec4 s = fetchNode(int(a_ends.x));
   vec4 t = fetchNode(int(a_ends.y));
-  vec2 d = t.xy - s.xy;
-  float len = length(d);
+  Curve c = makeCurve(s, t, a_width, a_arrow, a_offset);
   float al = arrowLen(a_width, a_arrow);
   float cr = circleR(a_width, a_arrow);
   float ext = u_end == 1 ? al * 0.5 : cr;
-  if (s.w < 0.5 || t.w < 0.5 || len < 1e-6 || ext <= 0.0) { gl_Position = OFFSCREEN; return; }
-  vec2 dir = d / len;
+  if (!c.ok || ext <= 0.0) { gl_Position = OFFSCREEN; return; }
+  float te = u_end == 1 ? c.t1 : c.t0;
+  vec2 dir = normalize(curveTangent(c, te));
   vec2 nrm = vec2(-dir.y, dir.x);
-  vec2 centre = u_end == 1 ? t.xy - dir * (t.z * 0.5 + al * 0.5) : s.xy + dir * (s.z * 0.5 + cr);
+  vec2 end = curveAt(c, te);
+  // the target arrow sits just beyond the trimmed end; the source circle just before it
+  vec2 centre = u_end == 1 ? end + dir * (al * 0.5) : end - dir * cr;
   float pad = 1.0 / u_pxPerWorld;
   vec2 world = centre + dir * (a_corner.x * (ext + pad)) + nrm * (a_corner.y * (ext + pad));
   gl_Position = vec4((u_view * vec3(world, 1.0)).xy, 0.0, 1.0);

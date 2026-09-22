@@ -38,6 +38,10 @@ function build(n: number): World {
     const a = Math.floor(rnd() * n), b = Math.floor(rnd() * n)
     if (a !== b) { src.push(a); tgt.push(b) }
   }
+  // bidirectional pairs (every 6th extra edge gets its reverse) and a triple
+  const extraStart = n - 1
+  for (let i = extraStart; i < src.length; i += 6) { src.push(tgt[i]); tgt.push(src[i]) }
+  src.push(src[extraStart], src[extraStart]); tgt.push(tgt[extraStart], tgt[extraStart])
   const m = src.length
   const ends = new Uint32Array(2 * m)
   const degree = new Uint32Array(n)
@@ -65,6 +69,7 @@ function build(n: number): World {
   }
   r.setNodeStyle({ size, color, shape, borderWidth: bw, borderColor: bc, borderDash: bd })
   const ec = new Uint8Array(4 * m), ew = new Float32Array(m), ea = new Uint8Array(m), ed = new Uint8Array(m)
+  baseEdgeStyle = { color: ec, width: ew, arrow: ea, dash: ed }
   for (let i = 0; i < m; i++) {
     ec.set(i < n - 1 ? [90, 96, 120, 200] : [170, 59, 255, 220], 4 * i)
     ew[i] = i < n - 1 ? 1.5 : 2
@@ -78,6 +83,7 @@ function build(n: number): World {
   return { n, sim, ends, degree, running: true, ticks: 0 }
 }
 
+let baseEdgeStyle: { color: Uint8Array; width: Float32Array; arrow: Uint8Array; dash: Uint8Array } | null = null
 let simMs = 0
 function frame() {
   const w = world
@@ -97,18 +103,42 @@ let drawMs = 0
 r.events.on('render', ({ frameMs }) => { drawMs = drawMs * 0.9 + frameMs * 0.1 })
 setInterval(() => {
   if (!world) return
-  hud.textContent = `${world.n} nodes, ${world.ends.length / 2} edges\nsim ${simMs.toFixed(2)} ms  draw(cpu) ${drawMs.toFixed(2)} ms\ntick ${world.ticks}  alpha ${world.sim.alpha().toFixed(3)}${world.running ? '' : ' (settled)'}\nzoom ${r.camera.zoom.toFixed(2)}  hover ${r.hoveredNode}`
+  hud.textContent = `${world.n} nodes, ${world.ends.length / 2} edges\nsim ${simMs.toFixed(2)} ms  draw(cpu) ${drawMs.toFixed(2)} ms\ntick ${world.ticks}  alpha ${world.sim.alpha().toFixed(3)}${world.running ? '' : ' (settled)'}\nzoom ${r.camera.zoom.toFixed(2)}  hover ${r.hoveredNode} / edge ${r.hoveredEdge}`
 }, 250)
 
-// interaction: hover label, drag pins through the simulation, click logs
-r.events.on('hover', ({ node }) => {
-  r.setLabels(node >= 0 && node !== 0 ? [{ node: 0, text: 'root', className: 'root' }, { node, text: `node ${node} (deg ${world?.degree[node]})` }] : [{ node: 0, text: 'root', className: 'root' }])
+// interaction: hover label, edge hover highlight, edge click names both ends,
+// drag pins through the simulation
+const rootLabel = { node: 0, text: 'root', className: 'root' }
+let selectedEdge = -1
+function restyleEdges(hovered: number) {
+  if (!baseEdgeStyle) return
+  const color = new Uint8Array(baseEdgeStyle.color), width = new Float32Array(baseEdgeStyle.width)
+  for (const e of [hovered, selectedEdge]) {
+    if (e < 0) continue
+    color.set([255, 209, 102, 255], 4 * e)
+    width[e] = 4
+  }
+  r.setEdgeStyle({ color, width })
+}
+function labelsFor(node: number) {
+  const labels = [rootLabel]
+  if (node >= 0 && node !== 0) labels.push({ node, text: `node ${node} (deg ${world?.degree[node]})`, className: '' })
+  if (selectedEdge >= 0) for (const n of r.edgeEnds(selectedEdge)) if (n !== 0 && n !== node) labels.push({ node: n, text: `node ${n}`, className: 'end' })
+  return labels
+}
+r.events.on('hover', ({ node, edge }) => {
+  r.setLabels(labelsFor(node))
+  restyleEdges(edge)
+})
+r.events.on('click', ({ node, edge }) => {
+  selectedEdge = node < 0 ? edge : -1
+  r.setLabels(labelsFor(node))
+  restyleEdges(edge)
 })
 r.events.on('dragstart', ({ node }) => { if (!world) return; world.sim.setAlphaTarget(0.3); world.running = true })
 r.events.on('drag', ({ node, x, y }) => { world?.sim.setFixed(node, x, y) })
 r.events.on('dragend', ({ node, x, y }) => { if (!world) return; world.sim.setFixed(node, x, y); world.sim.setAlphaTarget(0) })
 r.events.on('dblclick', ({ node }) => { if (node >= 0) world?.sim.setFixed(node, NaN, NaN) })
-r.events.on('click', (e) => console.log('click', e.node, e.x.toFixed(1), e.y.toFixed(1)))
 
 const sel = document.getElementById('n') as HTMLSelectElement
 sel.onchange = () => { world = build(+sel.value) }

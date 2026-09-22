@@ -69,7 +69,7 @@ def run_checks():
     src = (
         "(async () => { " + CHECKS + " })().then("
         "r => { window.__edgelitResult = JSON.stringify(r) },"
-        "e => { window.__edgelitResult = JSON.stringify({ok:false, error: String(e && e.stack || e)}) })"
+        "e => { window.__edgelitResult = JSON.stringify({ok:false, error: String(e && e.message || e) + ' | ' + String(e && e.stack || '')}) })"
     )
     view.evaluate_javascript(src, -1, None, None, None, None)
     GLib.timeout_add(500, poll)

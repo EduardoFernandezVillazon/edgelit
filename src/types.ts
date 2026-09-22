@@ -11,8 +11,10 @@ export const Arrow = { none: 0, targetTriangle: 1, sourceCircle: 2 } as const
 
 export interface GraphInput {
   nodeCount: number
-  /** Endpoint pairs `[s0, t0, s1, t1, …]` as node indices. */
+  /** Endpoint pairs `[s0, t0, s1, t1, …]` as node indices. Self-loops are not drawn. */
   edges: Uint32Array | number[]
+  /** Fan out edges that share a node pair as quadratic curves. Default true. */
+  curveParallel?: boolean
 }
 
 /** Per-node style, one entry per node. Every field is optional on update; omitted fields keep their values. */
@@ -46,11 +48,18 @@ export interface RendererOptions {
   maxZoom?: number
   /** Zoom multiplier per wheel notch. Default 1.1. */
   wheelZoomFactor?: number
+  /** Sideways spacing between parallel edges, world units. Default 16. */
+  parallelSpacing?: number
 }
 
 export interface PointerInfo {
   /** Node under the pointer, or -1. */
   node: number
+  /** Edge under the pointer when no node is, else -1. */
+  edge: number
+  /** Endpoints of `edge`, or -1. */
+  source: number
+  target: number
   /** World coordinates. */
   x: number
   y: number

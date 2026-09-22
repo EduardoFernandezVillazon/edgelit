@@ -50,3 +50,20 @@ PyGObject instead: an offscreen GTK window (X11 backend, Wayland's
 offscreen window has no GL context) loads the demo, runs `checks.js`, and
 parks the JSON result on `window` because `evaluate_javascript` cannot
 return a Promise.
+
+## 0.2 additions
+
+- **Parallel edges** are grouped in `setGraph` by unordered pair and get a
+  per-edge sideways offset (`curves.ts`). The shader builds a quadratic
+  through the displaced midpoint; offset 0 makes it the chord.
+- **Two draw ranges.** Tessellating every edge cost 13 to 18 ms at 26k
+  edges on the integrated GPU. Edges are permuted into straight-first slot
+  order on upload, so straight edges draw with four vertices and only the
+  curved tail draws with `2 * (EDGE_SEGMENTS + 1)`. WebGL2 has no base
+  instance, so the curved range binds the same buffers at a byte offset.
+  Style arrays arrive in edge order and are permuted on upload; picking and
+  events stay in edge order.
+- **Edge picking** uses a second grid over offset-expanded chord boxes and
+  a sampled-quadratic distance; nodes take precedence.
+- **Timing checks** use the best of ten synced frames: the machine this
+  runs on is shared, and the minimum approximates the uncontended cost.

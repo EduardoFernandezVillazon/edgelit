@@ -7,6 +7,8 @@ export interface InteractionHost {
   camera: Camera
   events: Emitter<EventMap>
   pick(clientX: number, clientY: number): number
+  pickEdge(clientX: number, clientY: number): number
+  edgeEnds(edge: number): [number, number]
   requestRender(): void
   wheelZoomFactor: number
 }
@@ -15,9 +17,10 @@ const DRAG_THRESHOLD_PX = 3
 
 /** Pointer handling: hover, click, double click, context menu, node drag, pan, wheel zoom. */
 export class Interaction {
-  private down: { x: number; y: number; node: number; id: number } | null = null
+  private down: { x: number; y: number; node: number; edge: number; id: number } | null = null
   private dragging = false
   private hovered = -1
+  private hoveredEdgeIdx = -1
   private hoverPending: { x: number; y: number; ev: PointerEvent } | null = null
   private disposers: Array<() => void> = []
   nodeDragEnabled = true
@@ -33,12 +36,12 @@ export class Interaction {
     on('pointermove', (e) => this.onMove(e))
     on('pointerup', (e) => this.onUp(e))
     on('pointercancel', (e) => this.onUp(e))
-    on('pointerleave', (e) => this.setHover(-1, e))
+    on('pointerleave', (e) => this.setHover(-1, -1, e))
     on('wheel', (e) => this.onWheel(e), { passive: false })
-    on('dblclick', (e) => this.host.events.emit('dblclick', this.info(e, this.host.pick(...this.local(e)))))
+    on('dblclick', (e) => this.host.events.emit('dblclick', this.infoAt(e)))
     on('contextmenu', (e) => {
       e.preventDefault()
-      this.host.events.emit('contextmenu', this.info(e, this.host.pick(...this.local(e))))
+      this.host.events.emit('contextmenu', this.infoAt(e))
     })
   }
 
@@ -47,17 +50,27 @@ export class Interaction {
     return [e.clientX - r.left, e.clientY - r.top]
   }
 
-  private info(e: PointerEvent | MouseEvent | WheelEvent, node: number): PointerInfo {
+  private info(e: PointerEvent | MouseEvent | WheelEvent, node: number, edge = -1): PointerInfo {
     const [cx, cy] = this.local(e)
     const [x, y] = this.host.camera.screenToWorld(cx, cy)
-    return { node, x, y, clientX: cx, clientY: cy, originalEvent: e }
+    const [source, target] = edge >= 0 ? this.host.edgeEnds(edge) : [-1, -1]
+    return { node, edge, source, target, x, y, clientX: cx, clientY: cy, originalEvent: e }
+  }
+
+  /** Node first, then edge, at the pointer. */
+  private infoAt(e: PointerEvent | MouseEvent): PointerInfo {
+    const [x, y] = this.local(e)
+    const node = this.host.pick(x, y)
+    const edge = node >= 0 ? -1 : this.host.pickEdge(x, y)
+    return this.info(e, node, edge)
   }
 
   private onDown(e: PointerEvent): void {
     if (e.button !== 0) return
     const [x, y] = this.local(e)
     const node = this.host.pick(x, y)
-    this.down = { x, y, node, id: e.pointerId }
+    const edge = node >= 0 ? -1 : this.host.pickEdge(x, y)
+    this.down = { x, y, node, edge, id: e.pointerId }
     this.dragging = false
     this.host.canvas.setPointerCapture(e.pointerId)
   }
@@ -87,7 +100,10 @@ export class Interaction {
     if (!this.hoverPending) requestAnimationFrame(() => {
       const p = this.hoverPending
       this.hoverPending = null
-      if (p) this.setHover(this.host.pick(p.x, p.y), p.ev)
+      if (!p) return
+      const node = this.host.pick(p.x, p.y)
+      const edge = node >= 0 ? -1 : this.host.pickEdge(p.x, p.y)
+      this.setHover(node, edge, p.ev)
     })
     this.hoverPending = { x, y, ev: e }
   }
@@ -102,7 +118,7 @@ export class Interaction {
       this.dragging = false
       return
     }
-    if (e.type === 'pointerup') this.host.events.emit('click', this.info(e, d.node))
+    if (e.type === 'pointerup') this.host.events.emit('click', this.info(e, d.node, d.edge))
   }
 
   private onWheel(e: WheelEvent): void {
@@ -115,10 +131,11 @@ export class Interaction {
     this.host.requestRender()
   }
 
-  private setHover(node: number, e: PointerEvent): void {
-    if (node === this.hovered) return
+  private setHover(node: number, edge: number, e: PointerEvent): void {
+    if (node === this.hovered && edge === this.hoveredEdgeIdx) return
     this.hovered = node
-    this.host.events.emit('hover', this.info(e, node))
+    this.hoveredEdgeIdx = edge
+    this.host.events.emit('hover', this.info(e, node, edge))
   }
 
   private emitViewport(): void {
@@ -129,6 +146,10 @@ export class Interaction {
   /** Re-evaluate hover after the graph moved under a still pointer. */
   get hoveredNode(): number {
     return this.hovered
+  }
+
+  get hoveredEdge(): number {
+    return this.hoveredEdgeIdx
   }
 
   destroy(): void {

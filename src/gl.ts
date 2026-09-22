@@ -103,22 +103,22 @@ export class InstanceBuffer {
   }
 
   /** Bind as a float attribute (normalized for byte colours). */
-  attrib(loc: number, size: number, type: number, normalized: boolean): void {
+  attrib(loc: number, size: number, type: number, normalized: boolean, byteOffset = 0): void {
     if (loc < 0) return // attribute optimised out of this program
     const gl = this.gl
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf)
     gl.enableVertexAttribArray(loc)
-    gl.vertexAttribPointer(loc, size, type, normalized, 0, 0)
+    gl.vertexAttribPointer(loc, size, type, normalized, 0, byteOffset)
     gl.vertexAttribDivisor(loc, 1)
   }
 
   /** Bind as an integer attribute. */
-  attribI(loc: number, size: number, type: number): void {
+  attribI(loc: number, size: number, type: number, byteOffset = 0): void {
     if (loc < 0) return
     const gl = this.gl
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf)
     gl.enableVertexAttribArray(loc)
-    gl.vertexAttribIPointer(loc, size, type, 0, 0)
+    gl.vertexAttribIPointer(loc, size, type, 0, byteOffset)
     gl.vertexAttribDivisor(loc, 1)
   }
 

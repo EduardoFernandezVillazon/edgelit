@@ -1,7 +1,8 @@
 import { Camera } from './camera'
 import { Emitter } from './events'
 import { NodeTexture } from './gl'
-import { SpatialGrid } from './grid'
+import { EdgeIndex, SpatialGrid } from './grid'
+import { parallelOffsets } from './curves'
 import { Interaction } from './interaction'
 import { LabelOverlay } from './labels'
 import { EdgeProgram, NodeProgram } from './programs'
@@ -24,6 +25,8 @@ export class Edgelit {
   private nodeCount = 0
   private edgeCount = 0
   private ends: Uint32Array<ArrayBufferLike> = new Uint32Array(0)
+  private offsets: Float32Array<ArrayBuffer> = new Float32Array(0)
+  private edgeWidth = new Float32Array(0)
   /** Interleaved xy mirror of the positions, float32. */
   private pos = new Float32Array(0)
   private size = new Float32Array(0)
@@ -35,6 +38,9 @@ export class Edgelit {
   private nodes: NodeProgram
   private edges: EdgeProgram
   private grid = new SpatialGrid()
+  private edgeIndex = new EdgeIndex()
+  private edgeIndexDirty = false
+  private parallelSpacing: number
   private labels: LabelOverlay | null = null
   private interaction: Interaction
   private view = new Float32Array(9)
@@ -57,6 +63,7 @@ export class Edgelit {
     this.dpr = opts.devicePixelRatio ?? (typeof window !== 'undefined' ? window.devicePixelRatio : 1)
     this.background = opts.background ?? [0, 0, 0, 0]
     this.wheelZoomFactor = opts.wheelZoomFactor ?? 1.1
+    this.parallelSpacing = opts.parallelSpacing ?? 16
     this.camera.minZoom = opts.minZoom ?? 0.05
     this.camera.maxZoom = opts.maxZoom ?? 20
 
@@ -72,6 +79,8 @@ export class Edgelit {
       camera: this.camera,
       events: this.events,
       pick: (x, y) => this.pick(x, y),
+      pickEdge: (x, y) => this.pickEdge(x, y),
+      edgeEnds: (e) => [this.ends[2 * e], this.ends[2 * e + 1]],
       requestRender: () => this.requestRender(),
       wheelZoomFactor: this.wheelZoomFactor,
     })
@@ -93,6 +102,8 @@ export class Edgelit {
     for (let i = 0; i < this.ends.length; i++) {
       if (this.ends[i] >= n) throw new Error(`edgelit: edge endpoint ${this.ends[i]} out of range (${n} nodes)`)
     }
+    this.offsets = g.curveParallel === false ? new Float32Array(this.edgeCount) : parallelOffsets(this.ends, n, this.parallelSpacing)
+    this.edgeWidth = new Float32Array(this.edgeCount).fill(DEFAULT_EDGE_WIDTH)
     this.pos = new Float32Array(2 * n)
     this.size = new Float32Array(n).fill(DEFAULT_NODE_SIZE)
     this.visible = new Uint8Array(n).fill(1)
@@ -112,14 +123,15 @@ export class Edgelit {
       borderColor: new Uint8Array(4 * n),
       borderDash: new Uint8Array(n),
     })
-    this.edges.reset(this.ends, {
+    this.edges.reset(this.ends, this.offsets, {
       color: new Uint8Array(4 * this.edgeCount).fill(120),
-      width: new Float32Array(this.edgeCount).fill(DEFAULT_EDGE_WIDTH),
+      width: this.edgeWidth,
       arrow: new Uint8Array(this.edgeCount),
       dash: new Uint8Array(this.edgeCount),
     })
     this.texDirty = true
     this.gridDirty = true
+    this.edgeIndexDirty = true
     this.requestRender()
   }
 
@@ -137,6 +149,7 @@ export class Edgelit {
     }
     this.texDirty = true
     this.gridDirty = true
+    this.edgeIndexDirty = true
     this.requestRender()
   }
 
@@ -161,6 +174,7 @@ export class Edgelit {
   }
 
   setEdgeStyle(style: EdgeStyle): void {
+    if (style.width) this.edgeWidth.set(style.width)
     this.edges.setStyle(style)
     this.requestRender()
   }
@@ -272,8 +286,37 @@ export class Edgelit {
     return this.grid.queryRect(this.pos, ax, ay, bx, by).filter((i) => this.visible[i] === 1)
   }
 
+  /** Edge under a CSS-pixel point (nodes are not considered), or -1. */
+  pickEdge(clientX: number, clientY: number): number {
+    if (this.edgeIndexDirty) {
+      this.edgeIndex.build(this.pos, this.ends, this.offsets, 128)
+      this.edgeIndexDirty = false
+    }
+    const [wx, wy] = this.camera.screenToWorld(clientX, clientY)
+    const slack = 3 / this.camera.zoom
+    return this.edgeIndex.pick(
+      this.pos, this.ends, this.offsets, wx, wy,
+      (e) => this.edgeWidth[e] / 2 + slack,
+      (e) => this.visible[this.ends[2 * e]] === 1 && this.visible[this.ends[2 * e + 1]] === 1 && this.ends[2 * e] !== this.ends[2 * e + 1],
+    )
+  }
+
+  /** Endpoints of an edge. */
+  edgeEnds(edge: number): [number, number] {
+    return [this.ends[2 * edge], this.ends[2 * edge + 1]]
+  }
+
+  /** Per-edge sideways offsets assigned to parallel edges (world units). */
+  get edgeOffsets(): Float32Array {
+    return this.offsets
+  }
+
   get hoveredNode(): number {
     return this.interaction.hoveredNode
+  }
+
+  get hoveredEdge(): number {
+    return this.interaction.hoveredEdge
   }
 
   set nodeDragEnabled(v: boolean) {

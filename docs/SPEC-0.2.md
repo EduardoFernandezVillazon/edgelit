@@ -1,6 +1,6 @@
 # edgelit 0.2 specification
 
-Agreed 2026-09-22. Scope: the two 0.1 limits that matter for the first
+Agreed 2026-09-22. Implemented the same day; see DESIGN.md for what changed in the doing (two draw ranges, best-of-ten timing). Scope: the two 0.1 limits that matter for the first
 consumer (nemo-graph), decided as follows. Labels stay DOM-only, below the
 node. Self-loops and touch gestures are out of scope. 0.2 ships before
 nemo's integration CR, so the consumer never sees the 0.1 straight-line
