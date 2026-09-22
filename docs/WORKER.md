@@ -31,7 +31,13 @@ ran inline. Nothing is lost; the stall is gone. At 20 000 nodes the
 layout still evolves at 9 or 10 ticks per second, which reads as a slow
 settle rather than a frozen window.
 
-## Protocol (as prototyped in `demo/simWorker.ts`)
+## Protocol
+
+Now implemented as the `forcefield-sim` package (`forcefield-sim/worker`
+and `forcefield-sim/client`); `demo/simWorker.ts` is a consumer-style
+worker entry using it. Re-measured on the published runtime, 2026-09-22
+evening: identical figures (main thread 17 ms p50/18 ms p95 at every size,
+tick rates within noise of inline).
 
 - The worker owns the wasm `Simulation` and everything that touches it.
 - Positions travel as transferable `Float32Array` buffers: the worker

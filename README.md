@@ -68,8 +68,9 @@ with `fx/fy`, for instance). Parallel-edge spacing is
 `curveParallel: false` to `setGraph` to draw everything straight. The
 canvas's parent element must be positioned for labels.
 
-The demo (`npm run dev`) drives edgelit from forcefield-wasm and is also
-the harness the tests run against.
+The demo (`npm run dev`) drives edgelit from forcefield-wasm, inline or in
+a Web Worker through `forcefield-sim`, and is also the harness the tests
+run against. See `docs/WORKER.md` for why the worker matters at scale.
 
 ## Tests
 
