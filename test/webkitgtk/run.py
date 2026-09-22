@@ -2,7 +2,7 @@
 """Drive the demo page in the system WebKitGTK (the engine Tauri embeds on Linux)
 and run the checks in checks.js inside it.
 
-Usage: python3 test/webkitgtk/run.py [http://localhost:5180/]
+Usage: python3 test/webkitgtk/run.py [http://localhost:5180/] [checks.js]
 Needs a display (Wayland or X11) because WebKitGTK renders through GTK.
 Exit code 0 when every check passes.
 """
@@ -21,7 +21,8 @@ from gi.repository import GLib, Gtk, WebKit2  # noqa: E402
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5180/"
 HERE = os.path.dirname(os.path.abspath(__file__))
-CHECKS = open(os.path.join(HERE, "checks.js")).read()
+CHECKS_FILE = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "checks.js")
+CHECKS = open(CHECKS_FILE).read()
 
 settings = WebKit2.Settings(
     enable_webgl=True,

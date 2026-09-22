@@ -1,6 +1,7 @@
 // Demo and browser-test harness: forcefield (wasm) drives the simulation,
 // edgelit draws it. Exposes `window.demo` for the Playwright tests.
 import init, { Simulation } from 'forcefield-wasm'
+import type { Cmd, Frame } from './simWorker'
 import { Arrow, Dash, Edgelit, Shape } from 'edgelit'
 
 await init()
@@ -23,6 +24,28 @@ interface World {
   ticks: number
 }
 let world: World | null = null
+
+// --- worker mode ---------------------------------------------------------
+let worker: Worker | null = null
+let workerMode = false
+let workerStats = { tick: 0, alpha: 1, simMs: 0, framesReceived: 0, lastFrameAt: 0, fps: 0 }
+function startWorker(n: number, positions: Float64Array, src: number[], tgt: number[], strength: number[]) {
+  worker?.terminate()
+  worker = new Worker(new URL('./simWorker.ts', import.meta.url), { type: 'module' })
+  worker.onmessage = (e: MessageEvent<Frame>) => {
+    const f = e.data
+    if (f.type !== 'frame') return
+    const pos = new Float32Array(f.buf)
+    r.setPositions(pos)                     // one O(n) copy into the texture staging
+    worker!.postMessage({ type: 'buffer', buf: f.buf } as Cmd, [f.buf])
+    const now = performance.now()
+    workerStats.fps = workerStats.lastFrameAt ? workerStats.fps * 0.9 + (1000 / (now - workerStats.lastFrameAt)) * 0.1 : 0
+    workerStats.lastFrameAt = now
+    workerStats.tick = f.tick; workerStats.alpha = f.alpha; workerStats.simMs = workerStats.simMs * 0.9 + f.simMs * 0.1; workerStats.framesReceived++
+  }
+  const msg: Cmd = { type: 'init', n, positions, src: Uint32Array.from(src), tgt: Uint32Array.from(tgt), strength: Float64Array.from(strength), bufferCount: 3 }
+  worker.postMessage(msg, [msg.positions.buffer, msg.src.buffer, msg.tgt.buffer, msg.strength.buffer])
+}
 
 function build(n: number): World {
   world?.sim.free()
@@ -47,6 +70,7 @@ function build(n: number): World {
   const degree = new Uint32Array(n)
   for (let i = 0; i < m; i++) { ends[2 * i] = src[i]; ends[2 * i + 1] = tgt[i]; degree[src[i]]++; degree[tgt[i]]++ }
 
+  if (workerMode) startWorker(n, Float64Array.from(pos), src.slice(), tgt.slice(), src.map((s, i) => 0.3 / Math.max(1, Math.min(degree[s], degree[tgt[i]]))))
   const sim = Simulation.fromPositions(pos)
   sim.setAlphaDecay(0.015); sim.setVelocityDecay(0.35)
   const strength = src.map((s, i) => 0.3 / Math.max(1, Math.min(degree[s], degree[tgt[i]])))
@@ -87,7 +111,7 @@ let baseEdgeStyle: { color: Uint8Array; width: Float32Array; arrow: Uint8Array; 
 let simMs = 0
 function frame() {
   const w = world
-  if (w && w.running) {
+  if (w && w.running && !workerMode) {
     const t = performance.now()
     w.sim.tick(1)
     simMs = simMs * 0.9 + (performance.now() - t) * 0.1
@@ -103,7 +127,9 @@ let drawMs = 0
 r.events.on('render', ({ frameMs }) => { drawMs = drawMs * 0.9 + frameMs * 0.1 })
 setInterval(() => {
   if (!world) return
-  hud.textContent = `${world.n} nodes, ${world.ends.length / 2} edges\nsim ${simMs.toFixed(2)} ms  draw(cpu) ${drawMs.toFixed(2)} ms\ntick ${world.ticks}  alpha ${world.sim.alpha().toFixed(3)}${world.running ? '' : ' (settled)'}\nzoom ${r.camera.zoom.toFixed(2)}  hover ${r.hoveredNode} / edge ${r.hoveredEdge}`
+  hud.textContent = workerMode
+    ? `${world.n} nodes, ${world.ends.length / 2} edges  [worker]\nsim ${workerStats.simMs.toFixed(1)} ms/tick in worker, ${workerStats.fps.toFixed(0)} frames/s  draw(cpu) ${drawMs.toFixed(2)} ms\ntick ${workerStats.tick}  alpha ${workerStats.alpha.toFixed(3)}\nzoom ${r.camera.zoom.toFixed(2)}  hover ${r.hoveredNode} / edge ${r.hoveredEdge}`
+    : `${world.n} nodes, ${world.ends.length / 2} edges\nsim ${simMs.toFixed(2)} ms  draw(cpu) ${drawMs.toFixed(2)} ms\ntick ${world.ticks}  alpha ${world.sim.alpha().toFixed(3)}${world.running ? '' : ' (settled)'}\nzoom ${r.camera.zoom.toFixed(2)}  hover ${r.hoveredNode} / edge ${r.hoveredEdge}`
 }, 250)
 
 // interaction: hover label, edge hover highlight, edge click names both ends,
@@ -135,17 +161,19 @@ r.events.on('click', ({ node, edge }) => {
   r.setLabels(labelsFor(node))
   restyleEdges(edge)
 })
-r.events.on('dragstart', ({ node }) => { if (!world) return; world.sim.setAlphaTarget(0.3); world.running = true })
-r.events.on('drag', ({ node, x, y }) => { world?.sim.setFixed(node, x, y) })
-r.events.on('dragend', ({ node, x, y }) => { if (!world) return; world.sim.setFixed(node, x, y); world.sim.setAlphaTarget(0) })
-r.events.on('dblclick', ({ node }) => { if (node >= 0) world?.sim.setFixed(node, NaN, NaN) })
+r.events.on('dragstart', () => { if (!world) return; if (workerMode) worker?.postMessage({ type: 'alphaTarget', value: 0.3 } as Cmd); else { world.sim.setAlphaTarget(0.3); world.running = true } })
+r.events.on('drag', ({ node, x, y }) => { if (workerMode) worker?.postMessage({ type: 'setFixed', node, x, y } as Cmd); else world?.sim.setFixed(node, x, y) })
+r.events.on('dragend', ({ node, x, y }) => { if (!world) return; if (workerMode) { worker?.postMessage({ type: 'setFixed', node, x, y } as Cmd); worker?.postMessage({ type: 'alphaTarget', value: 0 } as Cmd) } else { world.sim.setFixed(node, x, y); world.sim.setAlphaTarget(0) } })
+r.events.on('dblclick', ({ node }) => { if (node < 0) return; if (workerMode) worker?.postMessage({ type: 'setFixed', node, x: NaN, y: NaN } as Cmd); else world?.sim.setFixed(node, NaN, NaN) })
 
 const sel = document.getElementById('n') as HTMLSelectElement
 sel.onchange = () => { world = build(+sel.value) }
 document.getElementById('fit')!.onclick = () => r.fit({ padding: 40, animate: 300 })
-document.getElementById('toggle')!.onclick = () => { if (world) world.running = !world.running }
+document.getElementById('toggle')!.onclick = () => { if (!world) return; if (workerMode) { world.running = !world.running; worker?.postMessage({ type: 'run', running: world.running } as Cmd) } else world.running = !world.running }
+const modeSel = document.getElementById('mode') as HTMLSelectElement
+modeSel.onchange = () => { workerMode = modeSel.value === 'worker'; if (!workerMode) { worker?.terminate(); worker = null } world = build(+sel.value) }
 
 world = build(+sel.value)
 
-declare global { interface Window { demo: { r: Edgelit; build: (n: number) => void; world: () => World | null } } }
-window.demo = { r, build: (n) => { world = build(n) }, world: () => world }
+declare global { interface Window { demo: { r: Edgelit; build: (n: number) => void; world: () => World | null; setWorkerMode: (on: boolean) => void; workerStats: () => typeof workerStats } } }
+window.demo = { r, build: (n) => { world = build(n) }, world: () => world, setWorkerMode: (on) => { workerMode = on; if (!on) { worker?.terminate(); worker = null } }, workerStats: () => workerStats }
