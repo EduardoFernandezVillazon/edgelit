@@ -16,7 +16,7 @@ say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 say "preflight"
 [[ -z "$(git status --porcelain)" ]] || { echo "working tree not clean; commit or stash first"; exit 1; }
 git fetch -q origin && [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/master)" ]] || { echo "HEAD is not pushed to origin/master"; exit 1; }
-npm whoami >/dev/null 2>&1 || { echo "not logged in to npm (run: npm login)"; exit 1; }
+if (( PUBLISH )); then npm whoami >/dev/null 2>&1 || { echo "not logged in to npm (run: npm login)"; exit 1; }; fi
 
 say "tests and build"
 npm ci --silent
