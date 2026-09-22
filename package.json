@@ -1,0 +1,51 @@
+{
+  "name": "edgelit",
+  "version": "0.1.0",
+  "description": "WebGL2 graph renderer that draws from typed arrays: positions in, pixels out. Built to pair with an external force simulation such as forcefield.",
+  "type": "module",
+  "main": "./dist/edgelit.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/edgelit.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "dev": "vite --config demo/vite.config.ts",
+    "build": "tsc -p tsconfig.build.json && vite build",
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "graph",
+    "webgl",
+    "webgl2",
+    "renderer",
+    "network",
+    "visualization",
+    "force-directed"
+  ],
+  "author": "Eduardo Fernandez Villazon",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EduardoFernandezVillazon/edgelit.git"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.2",
+    "forcefield-wasm": "^0.1.0",
+    "typescript": "^5.6.0",
+    "vite": "^8.0.0",
+    "vite-plugin-dts": "^4.5.0",
+    "vitest": "^3.2.0"
+  }
+}
