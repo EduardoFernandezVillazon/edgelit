@@ -64,32 +64,31 @@ test('picking finds the node under the pointer and hover fires', async ({ page }
   await page.waitForFunction(() => window.demo.r.hoveredNode === 1)
 })
 
-test('20k nodes: frame cost stays interactive', async ({ page }) => {
+test('20k nodes: draw cost per frame stays small', async ({ page }) => {
   const stats = await page.evaluate(async () => {
     const { r, build, world } = window.demo
     build(20000)
     const w = world()!
-    const t0 = performance.now()
-    let frames = 0
-    const sims: number[] = []
+    w.running = false
+    // One tick for realistic positions; the simulation's own cost is not
+    // under test (it varies 10x between this laptop and a CI runner).
+    const a = performance.now()
+    w.sim.tick(1)
+    const simMs = performance.now() - a
     const draws: number[] = []
-    while (performance.now() - t0 < 3000) {
-      const a = performance.now()
-      w.sim.tick(1)
+    const t0 = performance.now()
+    while (draws.length < 30 && performance.now() - t0 < 5000) {
       const b = performance.now()
       r.setPositions(w.sim.positions())
       r.render()
-      const c = performance.now()
-      sims.push(b - a)
-      draws.push(c - b)
-      frames++
+      draws.push(performance.now() - b)
       await new Promise((res) => requestAnimationFrame(res))
     }
     const med = (xs: number[]) => xs.sort((x, y) => x - y)[Math.floor(xs.length / 2)]
-    return { frames, simMs: med(sims), drawMs: med(draws), edges: w.ends.length / 2 }
+    return { frames: draws.length, simMs, drawMs: med(draws), edges: w.ends.length / 2 }
   })
   console.log('20k:', stats)
-  expect(stats.frames).toBeGreaterThan(5) // the simulation dominates at 20k; draw cost is the assertion that matters
+  expect(stats.frames).toBeGreaterThanOrEqual(10)
   expect(stats.drawMs).toBeLessThan(16)
 })
 
