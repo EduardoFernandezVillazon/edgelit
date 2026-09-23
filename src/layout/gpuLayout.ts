@@ -66,7 +66,8 @@ export class GpuLayout {
   private links: LayoutLink[] = []
   private latest: Float32Array | null = null     // last readback, [x0,y0,x1,y1,…]
   private staging: Float32Array = new Float32Array(0)
-  private pending: { pbo: WebGLBuffer; sync: WebGLSync; startTick: number } | null = null
+  private pbo: WebGLBuffer | null = null            // one pixel-pack buffer per init, reused by every readback
+  private pending: { sync: WebGLSync; startTick: number } | null = null
   private cooling: { prev: Float32Array | null; prevTick: number; window: number[]; tickCount: number } | null = null
   private listeners = new Map<string, Set<Listener>>()
   private blitFbs = new WeakMap<WebGLTexture, WebGLFramebuffer>()
@@ -161,6 +162,11 @@ export class GpuLayout {
     this.pos = [this.target(W, this.rows, pos), this.target(W, this.rows, pos)]
     this.vel = [this.target(W, this.rows, vel), this.target(W, this.rows, vel)]
     this.staging = new Float32Array(W * this.rows * 4)
+    if (this.pbo) gl.deleteBuffer(this.pbo)
+    this.pbo = gl.createBuffer()!
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo)
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, this.staging.byteLength, gl.STREAM_READ)
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
     this.latest = new Float32Array(2 * n)
     for (let i = 0; i < n; i++) { this.latest[2 * i] = pos[4 * i]; this.latest[2 * i + 1] = pos[4 * i + 1] }
     this.levels = []
@@ -178,7 +184,7 @@ export class GpuLayout {
     this._running = running
     this.cooling = null
     this.applyCooling()
-    if (this.pending) { gl.deleteSync(this.pending.sync); gl.deleteBuffer(this.pending.pbo); this.pending = null }
+    if (this.pending) { gl.deleteSync(this.pending.sync); this.pending = null }
   }
 
   /** Re-derive the force textures from a new payload on the live simulation. */
@@ -285,7 +291,8 @@ export class GpuLayout {
       gl.bindFramebuffer(gl.FRAMEBUFFER, s.fb); gl.viewport(0, 0, s.w, s.h)
       gl.clearColor(-1, 2, 0, 0); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
       gl.uniform1i(uL('u_hasPrev'), k > 0 ? 1 : 0)
-      this.bind(1, (k > 0 ? this.slots[k - 1] : s).tex, uL('u_prev'))
+      // pass 0 reads no previous slot; binding its own target would be a feedback loop
+      this.bind(1, (k > 0 ? this.slots[k - 1] : this.levels[0]).tex, uL('u_prev'))
       gl.drawArrays(gl.POINTS, 0, this.n)
     })
     gl.disable(gl.DEPTH_TEST)
@@ -321,6 +328,7 @@ export class GpuLayout {
     // 5. readback cadence + cooling + end
     this.pollReadback()
     if (this.ticks % this.opts.readbackEvery === 0 && !this.pending) this.startReadback()
+    if (this.cooling && this.ticks >= Math.max(300, this.n * 10) && this.payload.adaptive) this._alphaDecay = this.payload.adaptive.alphaDecay
     this.emit('tick', this)
     if (this._alpha < this._alphaMin) { this._running = false; this.emit('end', this) }
   }
@@ -332,16 +340,15 @@ export class GpuLayout {
   private startReadback() {
     const gl = this.gl
     if (!this.pos) return
-    const pbo = gl.createBuffer()!
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo)
-    gl.bufferData(gl.PIXEL_PACK_BUFFER, this.staging.byteLength, gl.STREAM_READ)
+    if (!this.pbo) return
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.pos[0].fb)
     gl.readPixels(0, 0, W, this.rows, gl.RGBA, gl.FLOAT, 0)
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
     const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!
     gl.flush()
-    this.pending = { pbo, sync, startTick: this.ticks }
+    this.pending = { sync, startTick: this.ticks }
   }
   private pollReadback() {
     const gl = this.gl
@@ -349,13 +356,13 @@ export class GpuLayout {
     if (!pd) return
     const st = gl.clientWaitSync(pd.sync, 0, 0)
     if (st === gl.TIMEOUT_EXPIRED || st === gl.WAIT_FAILED) { if (st === gl.WAIT_FAILED) this.dropPending(); return }
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pd.pbo)
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo)
     gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.staging)
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
     this.dropPending()
     this.absorb(pd.startTick)
   }
-  private dropPending() { const gl = this.gl; if (!this.pending) return; gl.deleteSync(this.pending.sync); gl.deleteBuffer(this.pending.pbo); this.pending = null }
+  private dropPending() { const gl = this.gl; if (!this.pending) return; gl.deleteSync(this.pending.sync); this.pending = null }
   private absorb(atTick: number) {
     const n = this.n, s = this.staging, out = this.latest!
     let extent = 0
@@ -386,6 +393,7 @@ export class GpuLayout {
     const maxTicks = Math.max(300, this.n * 10)
     c.tickCount = atTick
     if (c.tickCount >= maxTicks) { this._alphaDecay = base; return }
+    if (c.prev && atTick <= c.prevTick) return
     const cur = this.latest!
     if (c.prev && atTick > c.prevTick) {
       let sum = 0
@@ -395,7 +403,8 @@ export class GpuLayout {
       if (c.window.length > 5) c.window.shift()
       if (c.window.length === 5) { const avg = c.window.reduce((x, y) => x + y, 0) / 5; this._alphaDecay = avg > threshold ? 0 : base }
     }
-    c.prev = Float32Array.from(cur); c.prevTick = atTick
+    if (!c.prev || c.prev.length !== cur.length) c.prev = new Float32Array(cur.length)
+    c.prev.set(cur); c.prevTick = atTick
   }
 
   // ---- renderer coupling
@@ -414,5 +423,5 @@ export class GpuLayout {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   }
 
-  free(): void { this.dropPending(); this.freeAll(); this.n = 0 }
+  free(): void { this.dropPending(); this.freeAll(); if (this.pbo) { this.gl.deleteBuffer(this.pbo); this.pbo = null } this.n = 0 }
 }

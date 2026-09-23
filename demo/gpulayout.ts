@@ -18,7 +18,8 @@ export function buildGraph(n: number, seed = 1) {
   return { src, tgt }
 }
 
-export function build(n: number, opts: { dagPairs?: Array<[number, number]>; pins?: Array<[number, number, number]>; adaptive?: boolean; links?: { src: number[]; tgt: number[] } } = {}) {
+export function build(n: number, opts: { dagPairs?: Array<[number, number]>; pins?: Array<[number, number, number]>; adaptive?: boolean; links?: { src: number[]; tgt: number[] }; noCentre?: boolean } = {}) {
+  const t0 = performance.now()
   const { src, tgt } = opts.links ?? buildGraph(n)
   const m = src.length
   const ends = new Uint32Array(2 * m), degree = new Uint32Array(n)
@@ -35,11 +36,12 @@ export function build(n: number, opts: { dagPairs?: Array<[number, number]>; pin
   const links = src.map((s2, i) => ({ source: s2, target: tgt[i] }))
   const depth = new Float32Array(n)   // depth from the tree root: strength 5x, 3x, 1.5x, 1x like nemo
   for (let i = 1; i < n - 1 && i < src.length; i++) depth[tgt[i]] = depth[src[i]] + 1
-  const centre = Float32Array.from(depth, (d) => 0.05 * (d === 0 ? 5 : d === 1 ? 3 : d === 2 ? 1.5 : 1))
+  const centre = opts.noCentre ? new Float32Array(n) : Float32Array.from(depth, (d) => 0.05 * (d === 0 ? 5 : d === 1 ? 3 : d === 2 ? 1.5 : 1))
   layout.init({ nodes, links, payload: { centreStrength: centre, radius: Float32Array.from(size, (v) => v / 2 + 4), dagPairs: opts.dagPairs ?? null, adaptive: { adaptiveCooling: opts.adaptive ?? true, alphaDecay: 0.015, movementThreshold: 0.5 } } })
   r.setPositions(layout.positions)
   r.fit({ padding: 40 })
   world = { n, ends, degree, ticks: 0 }
+  ;(window as any).__lastBuildMs = performance.now() - t0
   return world
 }
 
@@ -49,7 +51,11 @@ layout.on('readback', (pos: Float32Array) => { r.setPositionsMirror(pos) })
 function frame() {
   if (world && !paused) {
     const t = performance.now()
-    if (layout.step()) { const { tex, rows } = r.positionTexture; layout.blitInto(tex, rows); r.requestRender(); world.ticks++ }
+    const s0 = performance.now()
+    const ticked = layout.step()
+    const s1 = performance.now()
+    if (ticked) { const { tex, rows } = r.positionTexture; layout.blitInto(tex, rows); r.requestRender(); world.ticks++ }
+    const w = window as any; w.__stepMax = Math.max(w.__stepMax ?? 0, s1 - s0); w.__blitMax = Math.max(w.__blitMax ?? 0, performance.now() - s1)
     frameMs = frameMs * 0.9 + (performance.now() - t) * 0.1
   }
   if (world) hud.textContent = `n=${world.n}  ticks=${layout.ticks}  alpha=${layout.alpha().toFixed(3)}  decay=${layout.alphaDecay()}  running=${layout.running}  cpu ms/frame=${frameMs.toFixed(2)}  draw=${r.stats.frameMs.toFixed(2)}`

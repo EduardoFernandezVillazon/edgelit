@@ -1,6 +1,6 @@
-import { TEX_WIDTH, Camera } from './camera'
+import { Camera } from './camera'
 import { Emitter } from './events'
-import { NodeTexture } from './gl'
+import { NodeTexture, TEX_WIDTH } from './gl'
 import { EdgeIndex, SpatialGrid } from './grid'
 import { parallelOffsets } from './curves'
 import { Interaction } from './interaction'
