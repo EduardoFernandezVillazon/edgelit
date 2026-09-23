@@ -1,4 +1,4 @@
-import { Camera } from './camera'
+import { TEX_WIDTH, Camera } from './camera'
 import { Emitter } from './events'
 import { NodeTexture } from './gl'
 import { EdgeIndex, SpatialGrid } from './grid'
@@ -130,6 +130,35 @@ export class Edgelit {
       dash: new Uint8Array(this.edgeCount),
     })
     this.texDirty = true
+    this.gridDirty = true
+    this.edgeIndexDirty = true
+    this.requestRender()
+  }
+
+  /**
+   * The node texture a GPU layout writes positions into directly
+   * (`GpuLayout.blitInto`). `rows` is its height in texels.
+   */
+  get positionTexture(): { tex: WebGLTexture; rows: number } {
+    return { tex: this.tex.tex, rows: Math.max(1, Math.ceil(this.nodeCount / TEX_WIDTH)) }
+  }
+
+  /**
+   * Update ONLY the CPU mirror (picking grid, edge index, labels, staging)
+   * from positions that already live on the GPU — no texture upload, so a
+   * GPU layout's texture is never overwritten by a stale readback.
+   */
+  setPositionsMirror(p: ArrayLike<number>): void {
+    const n = this.nodeCount
+    const s = this.tex.staging
+    const pos = this.pos
+    for (let i = 0; i < n; i++) {
+      const x = p[2 * i], y = p[2 * i + 1]
+      pos[2 * i] = x
+      pos[2 * i + 1] = y
+      s[4 * i] = x
+      s[4 * i + 1] = y
+    }
     this.gridDirty = true
     this.edgeIndexDirty = true
     this.requestRender()
