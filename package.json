@@ -1,6 +1,6 @@
 {
   "name": "edgelit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "WebGL2 graph renderer that draws from typed arrays: positions in, pixels out. Built to pair with an external force simulation such as forcefield.",
   "type": "module",
   "main": "./dist/edgelit.js",
